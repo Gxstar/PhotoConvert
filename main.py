@@ -7,10 +7,17 @@ from tkinter import filedialog, messagebox
 from pathlib import Path
 from wand.image import Image
 import multiprocessing
+from datetime import datetime
 
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 from ttkbootstrap.widgets import ToolTip
+
+try:
+    import piexif
+    HAS_PIEXIF = True
+except ImportError:
+    HAS_PIEXIF = False
 
 
 class PhotoConverter:
@@ -22,10 +29,11 @@ class PhotoConverter:
     def __init__(self, root):
         self.root = root
         self.root.title("图片格式转换器")
-        self.root.geometry("520x510")
+        self.root.geometry("520x650")
         self.root.resizable(False, False)
 
         self.selected_files = []
+        self.current_seq = 1
 
         self._create_widgets()
 
@@ -85,6 +93,40 @@ class PhotoConverter:
             variable=self.replace_var
         )
         replace_check.pack(anchor='w', pady=(5, 0))
+
+        # 文件重命名选项
+        rename_frame = ttk.Labelframe(self.root, text="文件重命名", padding=10)
+        rename_frame.pack(fill='x', padx=10, pady=5)
+
+        # 启用重命名
+        self.rename_var = tk.BooleanVar(value=False)
+        rename_check = ttk.Checkbutton(
+            rename_frame,
+            text="重命名输出文件",
+            variable=self.rename_var,
+            command=self._toggle_rename_options
+        )
+        rename_check.pack(anchor='w')
+
+        # 命名格式
+        format_row = ttk.Frame(rename_frame)
+        format_row.pack(fill='x', pady=(5, 0))
+        ttk.Label(format_row, text="命名格式:").pack(side='left')
+        self.rename_format_var = tk.StringVar(value="{date}_{model}_{seq}")
+        format_entry = ttk.Entry(format_row, textvariable=self.rename_format_var, width=25)
+        format_entry.pack(side='left', padx=5)
+        format_help = ttk.Label(format_row, text="?", foreground="#1E90FF", cursor="hand2")
+        format_help.pack(side='left')
+        ToolTip(format_help, text="可用变量:\n{date} - 拍摄日期 (YYYYMMDD)\n{time} - 拍摄时间 (HHMMSS)\n{model} - 相机型号\n{seq} - 序号 (001, 002...)\n{orig} - 原文件名\n示例: {date}_{model}_{seq}")
+
+        # 序号起始值
+        seq_row = ttk.Frame(rename_frame)
+        seq_row.pack(fill='x', pady=(5, 0))
+        ttk.Label(seq_row, text="序号起始:").pack(side='left')
+        self.seq_start_var = tk.IntVar(value=1)
+        seq_spinbox = ttk.Spinbox(seq_row, from_=0, to=9999, textvariable=self.seq_start_var, width=8)
+        seq_spinbox.pack(side='left', padx=5)
+        ttk.Label(seq_row, text="(从EXIF读取日期和相机型号)", foreground="gray").pack(side='left', padx=5)
         quality_frame = ttk.Labelframe(self.root, text="图像质量", padding=10)
         quality_frame.pack(fill='x', padx=10, pady=5)
 
@@ -174,6 +216,60 @@ class PhotoConverter:
         """更新质量显示标签"""
         self.quality_label.config(text=f"{int(float(value))}%")
 
+    def _toggle_rename_options(self):
+        """切换重命名选项状态"""
+        pass  # 格式输入框始终可用，方便用户预览
+
+    def _get_exif_data(self, file_path):
+        """从图片读取 EXIF 信息"""
+        exif_data = {
+            'date': '00000000',
+            'time': '000000',
+            'model': 'Unknown'
+        }
+        
+        if not HAS_PIEXIF:
+            return exif_data
+        
+        try:
+            exif_dict = piexif.load(file_path)
+            if exif_dict:
+                # 读取拍摄日期时间
+                if 'Exif' in exif_dict and piexif.ExifIFD.DateTimeOriginal in exif_dict['Exif']:
+                    date_str = exif_dict['Exif'][piexif.ExifIFD.DateTimeOriginal].decode('utf-8')
+                    # 格式: "2024:01:15 14:30:25"
+                    if ' ' in date_str:
+                        date_part, time_part = date_str.split(' ')
+                        exif_data['date'] = date_part.replace(':', '')
+                        exif_data['time'] = time_part.replace(':', '')
+                
+                # 读取相机型号
+                if '0th' in exif_dict and piexif.ImageIFD.Model in exif_dict['0th']:
+                    model = exif_dict['0th'][piexif.ImageIFD.Model].decode('utf-8')
+                    # 清理型号中的特殊字符
+                    model = ''.join(c if c.isalnum() or c in '_-' else '_' for c in model)
+                    exif_data['model'] = model if model else 'Unknown'
+        except Exception:
+            pass
+        
+        return exif_data
+
+    def _generate_filename(self, file_path, seq):
+        """根据格式生成新文件名"""
+        format_str = self.rename_format_var.get()
+        exif = self._get_exif_data(file_path)
+        orig_name = Path(file_path).stem
+        
+        new_name = format_str.format(
+            date=exif['date'],
+            time=exif['time'],
+            model=exif['model'],
+            seq=f"{seq:03d}",
+            orig=orig_name
+        )
+        
+        return new_name
+
     def _select_files(self):
         """选择文件"""
         files = filedialog.askopenfilenames(
@@ -236,6 +332,7 @@ class PhotoConverter:
 
         output_format = self.format_var.get()
         replace_source = self.replace_var.get()
+        do_rename = self.rename_var.get()
 
         # 设置线程数
         threads = self.threads_var.get()
@@ -258,9 +355,10 @@ class PhotoConverter:
         success_count = 0
         fail_count = 0
 
-        # 重置进度条
+        # 重置进度条和序号
         self.progress_var.set(0)
         self.progress_label.config(text=f"0/{total_count}")
+        self.current_seq = self.seq_start_var.get()
 
         for idx, file_path in enumerate(self.selected_files, 1):
             try:
@@ -302,20 +400,27 @@ class PhotoConverter:
                         speed_factor = speed_map[speed] / 100.0
                         img.compression_quality = int(base_quality * (0.5 + 0.5 * speed_factor))
 
+                    # 确定输出文件名
+                    if do_rename:
+                        new_name = self._generate_filename(file_path, self.current_seq)
+                        self.current_seq += 1
+                    else:
+                        new_name = Path(file_path).stem
+
                     if replace_source:
                         # 替换源文件
-                        output_path = Path(file_path).with_suffix(f'.{output_format}')
+                        output_path = Path(file_path).parent / f"{new_name}.{output_format}"
                         img.save(filename=str(output_path))
 
-                        # 删除原文件（如果扩展名不同）
+                        # 删除原文件（如果路径不同）
                         if Path(file_path) != output_path:
                             Path(file_path).unlink()
                     else:
                         # 根据输出目录设置决定输出路径
                         if self.output_dir:
-                            output_path = Path(self.output_dir) / (Path(file_path).stem + f'.{output_format}')
+                            output_path = Path(self.output_dir) / f"{new_name}.{output_format}"
                         else:
-                            output_path = Path(file_path).with_suffix(f'.{output_format}')
+                            output_path = Path(file_path).parent / f"{new_name}.{output_format}"
                         img.save(filename=str(output_path))
 
                 success_count += 1
