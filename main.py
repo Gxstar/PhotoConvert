@@ -330,7 +330,7 @@ class PhotoConverter:
             messagebox.showwarning("提示", "请先选择文件")
             return
 
-        output_format = self.format_var.get()
+        output_format = self.format_var.get().lower()
         replace_source = self.replace_var.get()
         do_rename = self.rename_var.get()
 
@@ -353,6 +353,8 @@ class PhotoConverter:
 
         total_count = len(self.selected_files)
         success_count = 0
+        skip_count = 0  # 跳过的文件数（格式相同且不重命名）
+        rename_only_count = 0  # 仅重命名的文件数（格式相同但需要重命名）
         fail_count = 0
 
         # 重置进度条和序号
@@ -362,16 +364,62 @@ class PhotoConverter:
 
         for idx, file_path in enumerate(self.selected_files, 1):
             try:
-                self.status_var.set(f"正在转换: {Path(file_path).name}")
+                self.status_var.set(f"正在处理: {Path(file_path).name}")
                 # 更新进度
                 self.progress_var.set((idx / total_count) * 100)
                 self.progress_label.config(text=f"{idx}/{total_count}")
                 self.root.update()
 
+                src_path = Path(file_path)
+                src_format = src_path.suffix[1:].lower()  # 去掉点号，转小写
+                same_format = (src_format == output_format)
+
+                # 确定输出文件名
+                if do_rename:
+                    new_name = self._generate_filename(file_path, self.current_seq)
+                    self.current_seq += 1
+                else:
+                    new_name = src_path.stem
+
+                # 确定输出路径
+                if replace_source:
+                    output_path = src_path.parent / f"{new_name}.{output_format}"
+                elif self.output_dir:
+                    output_path = Path(self.output_dir) / f"{new_name}.{output_format}"
+                else:
+                    output_path = src_path.parent / f"{new_name}.{output_format}"
+
+                # 格式相同的情况
+                if same_format:
+                    if not do_rename and output_path == src_path:
+                        # 格式相同、不重命名、路径相同 → 无需任何操作
+                        skip_count += 1
+                        success_count += 1
+                        continue
+                    elif not do_rename and output_path != src_path:
+                        # 格式相同、不重命名、但路径不同（输出目录不同）→ 仅移动
+                        import shutil
+                        shutil.copy2(str(src_path), str(output_path))
+                        if replace_source:
+                            src_path.unlink()
+                        rename_only_count += 1
+                        success_count += 1
+                        continue
+                    else:
+                        # 格式相同、需要重命名 → 仅重命名/移动，不重新编码
+                        import shutil
+                        shutil.copy2(str(src_path), str(output_path))
+                        if replace_source and src_path != output_path:
+                            src_path.unlink()
+                        rename_only_count += 1
+                        success_count += 1
+                        continue
+
+                # 格式不同 → 正常转换
                 with Image(filename=file_path) as img:
                     # 设置图像质量（对有损压缩格式有效）
                     quality = self.quality_var.get()
-                    if output_format.lower() in ['jpg', 'jpeg', 'webp', 'avif', 'heif', 'heic', 'jxl']:
+                    if output_format in ['jpg', 'jpeg', 'webp', 'avif', 'heif', 'heic', 'jxl']:
                         img.compression_quality = quality
 
                     # 设置位深度
@@ -394,43 +442,34 @@ class PhotoConverter:
 
                     # 设置速度（通过 quality 调整）
                     speed = self.speed_var.get()
-                    if speed in speed_map and output_format.lower() in ['jpg', 'jpeg', 'webp', 'avif', 'heif', 'heic', 'jxl']:
+                    if speed in speed_map and output_format in ['jpg', 'jpeg', 'webp', 'avif', 'heif', 'heic', 'jxl']:
                         # 速度越快，质量越低
                         base_quality = self.quality_var.get()
                         speed_factor = speed_map[speed] / 100.0
                         img.compression_quality = int(base_quality * (0.5 + 0.5 * speed_factor))
 
-                    # 确定输出文件名
-                    if do_rename:
-                        new_name = self._generate_filename(file_path, self.current_seq)
-                        self.current_seq += 1
-                    else:
-                        new_name = Path(file_path).stem
+                    img.save(filename=str(output_path))
 
-                    if replace_source:
-                        # 替换源文件
-                        output_path = Path(file_path).parent / f"{new_name}.{output_format}"
-                        img.save(filename=str(output_path))
-
-                        # 删除原文件（如果路径不同）
-                        if Path(file_path) != output_path:
-                            Path(file_path).unlink()
-                    else:
-                        # 根据输出目录设置决定输出路径
-                        if self.output_dir:
-                            output_path = Path(self.output_dir) / f"{new_name}.{output_format}"
-                        else:
-                            output_path = Path(file_path).parent / f"{new_name}.{output_format}"
-                        img.save(filename=str(output_path))
+                # 如果是替换源文件模式，删除原文件
+                if replace_source and src_path != output_path:
+                    src_path.unlink()
 
                 success_count += 1
             except Exception as e:
                 fail_count += 1
-                print(f"转换失败: {file_path}, 错误: {e}")
+                print(f"处理失败: {file_path}, 错误: {e}")
 
         # 显示结果
-        message = f"转换完成！成功: {success_count}，失败: {fail_count}"
-        self.status_var.set(message)
+        result_parts = [f"成功: {success_count}"]
+        if rename_only_count > 0:
+            result_parts.append(f"仅重命名: {rename_only_count}")
+        if skip_count > 0:
+            result_parts.append(f"跳过(无需转换): {skip_count}")
+        if fail_count > 0:
+            result_parts.append(f"失败: {fail_count}")
+        message = "处理完成！\n" + "，".join(result_parts)
+
+        self.status_var.set(message.replace('\n', ' '))
         self.progress_label.config(text=f"{total_count}/{total_count}")
         messagebox.showinfo("完成", message)
 
