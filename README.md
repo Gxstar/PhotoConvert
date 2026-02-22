@@ -4,7 +4,8 @@
 
 ## 功能特性
 
-- **多格式支持**：PNG、JPG、JPEG、GIF、BMP、TIFF、WebP、HEIF、HEIC、AVIF、JXL
+- **多格式输入**：PNG、JPG、JPEG、GIF、BMP、TIFF、WebP、HEIF、HEIC、AVIF、JXL
+- **多格式输出**：PNG、JPG、JPEG、GIF、BMP、TIFF、WebP、AVIF、JXL
 - **批量转换**：支持选择多个文件或整个文件夹进行批量处理
 - **智能优化**：源格式与目标格式相同时自动跳过转换，仅重命名或移动文件
 - **文件重命名**：支持基于 EXIF 信息自定义命名格式（日期、相机型号、序号等）
@@ -117,8 +118,7 @@ pyinstaller -F -w --hidden-import=ttkbootstrap --name "PhotoConvert" main.py
 ## 依赖说明
 
 - [ttkbootstrap](https://github.com/israel-dryer/ttkbootstrap) - 现代化的 Tkinter 主题
-- [Wand](https://docs.wand-py.org/) - ImageMagick 的 Python 绑定
-- [piexif](https://github.com/hMatoba/Piexif) - EXIF 信息读取
+- [Wand](https://docs.wand-py.org/) - ImageMagick 的 Python 绑定，用于图片处理和 EXIF 信息提取
 
 ## 许可证
 

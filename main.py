@@ -13,17 +13,11 @@ import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 from ttkbootstrap.widgets import ToolTip
 
-try:
-    import piexif
-    HAS_PIEXIF = True
-except ImportError:
-    HAS_PIEXIF = False
-
 
 class PhotoConverter:
     """图片格式转换器"""
 
-    SUPPORTED_FORMATS = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'tiff', 'webp', 'heif', 'heic', 'avif', 'jxl']
+    SUPPORTED_FORMATS = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'tiff', 'webp', 'avif', 'jxl']
     IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp', '.heif', '.heic', '.avif', '.jxl'}
 
     def __init__(self, root):
@@ -221,31 +215,27 @@ class PhotoConverter:
         pass  # 格式输入框始终可用，方便用户预览
 
     def _get_exif_data(self, file_path):
-        """从图片读取 EXIF 信息"""
+        """从图片读取 EXIF 信息（使用 Wand）"""
         exif_data = {
             'date': '00000000',
             'time': '000000',
             'model': 'Unknown'
         }
         
-        if not HAS_PIEXIF:
-            return exif_data
-        
         try:
-            exif_dict = piexif.load(file_path)
-            if exif_dict:
+            with Image(filename=file_path) as img:
                 # 读取拍摄日期时间
-                if 'Exif' in exif_dict and piexif.ExifIFD.DateTimeOriginal in exif_dict['Exif']:
-                    date_str = exif_dict['Exif'][piexif.ExifIFD.DateTimeOriginal].decode('utf-8')
+                date_str = img.metadata.get('exif:DateTimeOriginal')
+                if date_str:
                     # 格式: "2024:01:15 14:30:25"
-                    if ' ' in date_str:
-                        date_part, time_part = date_str.split(' ')
-                        exif_data['date'] = date_part.replace(':', '')
-                        exif_data['time'] = time_part.replace(':', '')
+                    parts = date_str.replace(' ', ':').split(':')
+                    if len(parts) >= 6:
+                        exif_data['date'] = ''.join(parts[:3])
+                        exif_data['time'] = ''.join(parts[3:6])
                 
                 # 读取相机型号
-                if '0th' in exif_dict and piexif.ImageIFD.Model in exif_dict['0th']:
-                    model = exif_dict['0th'][piexif.ImageIFD.Model].decode('utf-8')
+                model = img.metadata.get('exif:Model')
+                if model:
                     # 清理型号中的特殊字符
                     model = ''.join(c if c.isalnum() or c in '_-' else '_' for c in model)
                     exif_data['model'] = model if model else 'Unknown'
